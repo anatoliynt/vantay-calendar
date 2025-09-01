@@ -1,0 +1,18 @@
+# Node / Frontend
+node_modules/
+dist/
+build/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Common
+.env
+.env.*
+.idea/
+.vscode/
+.DS_Store
