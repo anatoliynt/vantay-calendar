@@ -16,3 +16,15 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+# node
+node_modules/
+npm-debug.log*
+apps/node-api/node_modules/
+
+# python
+*.pyc
+__pycache__/
+apps/py-api/.venv/
+
+# env
+.env
