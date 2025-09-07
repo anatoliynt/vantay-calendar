@@ -13,7 +13,7 @@ const pool = new Pool({
 });
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "node", time: new Date().toISOString() });
+  res.json({ ok: true, service: "node", ciTag: "ci-test-1", time: new Date().toISOString() });
 });
 
 app.get("/db-check", async (_req, res) => {
