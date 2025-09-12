@@ -28,3 +28,6 @@ apps/py-api/.venv/
 
 # env
 .env
+
+# editors backup (Mobaxterm etc)
+* after.*
