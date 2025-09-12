@@ -1,16 +1,28 @@
-from fastapi import FastAPI, Response, status, Query, HTTPException
+from fastapi import FastAPI, Response, status, Query, Depends, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import asyncpg
-import os
+import asyncpg, os
 from datetime import datetime
-from typing import Optional, Literal, List
-from pydantic import BaseModel, EmailStr, field_validator
+from typing import Optional, Literal
+from pydantic import BaseModel, EmailStr, model_validator
+
+def get_api_key():
+    key = os.getenv("API_KEY")
+    if not key:
+        raise HTTPException(status_code=500, detail="API key not set")
+    return key
+
+async def require_bearer(authorization: str = Header(None), api_key: str = Depends(get_api_key)):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    token = authorization.split(" ", 1)[1]
+    if token != api_key:
+        raise HTTPException(status_code=401, detail="unauthorized")
 
 app = FastAPI(title="vantay-fastapi")
 DATABASE_URL = os.getenv("DATABASE_URL")
 POOL: Optional[asyncpg.Pool] = None
 
-# CORS (на будущее фронту; при желании сузьте список)
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://cl.vantay.ru", "https://sub.vantay.ru", "http://localhost:5173"],
@@ -21,6 +33,8 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     global POOL
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set")
     POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5, ssl=False)
 
 @app.on_event("shutdown")
@@ -33,7 +47,7 @@ async def health():
     return {"ok": True, "service": "fastapi", "time": datetime.utcnow().isoformat()}
 
 @app.get("/db-check")
-async def db_check(response: Response):
+async def db_check(response: Response, _: None = Depends(require_bearer)):
     try:
         async with POOL.acquire() as conn:
             row = await conn.fetchrow("select current_user, current_database(), now()")
@@ -59,17 +73,15 @@ class AppointmentIn(BaseModel):
     client_id: Optional[int] = None
     start_at: datetime
     end_at: datetime
-    status: Literal["scheduled", "canceled", "done"] = "scheduled"
+    status: Literal["scheduled","canceled","done"] = "scheduled"
     title: Optional[str] = None
     notes: Optional[str] = None
 
-    @field_validator("end_at")
-    @classmethod
-    def validate_time(cls, v, info):
-        start_at = info.data.get("start_at")
-        if start_at and v <= start_at:
+    @model_validator(mode="after")
+    def check_times(self):
+        if self.end_at <= self.start_at:
             raise ValueError("end_at must be greater than start_at")
-        return v
+        return self
 
 class AppointmentOut(AppointmentIn):
     id: int
@@ -79,7 +91,7 @@ class AppointmentOut(AppointmentIn):
 
 # ---------- CLIENTS ----------
 @app.get("/api/clients")
-async def clients_list(user_id: int = Query(...), limit: int = Query(100, ge=1, le=500)):
+async def clients_list(user_id: int = Query(...), limit: int = Query(100, ge=1, le=500), _: None = Depends(require_bearer)):
     async with POOL.acquire() as conn:
         rows = await conn.fetch(
             "select id, user_id, name, email, phone, created_at, updated_at "
@@ -88,8 +100,8 @@ async def clients_list(user_id: int = Query(...), limit: int = Query(100, ge=1, 
         )
         return {"items": [dict(r) for r in rows]}
 
-@app.post("/api/clients")
-async def clients_create(payload: ClientIn):
+@app.post("/api/clients", status_code=201)
+async def clients_create(payload: ClientIn, _: None = Depends(require_bearer)):
     async with POOL.acquire() as conn:
         row = await conn.fetchrow(
             "insert into app.clients(user_id,name,email,phone) values($1,$2,$3,$4) "
@@ -99,7 +111,7 @@ async def clients_create(payload: ClientIn):
         return {"ok": True, "item": dict(row)}
 
 @app.put("/api/clients/{client_id}")
-async def clients_update(client_id: int, payload: ClientIn):
+async def clients_update(client_id: int, payload: ClientIn, _: None = Depends(require_bearer)):
     async with POOL.acquire() as conn:
         row = await conn.fetchrow(
             "update app.clients set name=$1, email=$2, phone=$3 "
@@ -112,7 +124,7 @@ async def clients_update(client_id: int, payload: ClientIn):
         return {"ok": True, "item": dict(row)}
 
 @app.delete("/api/clients/{client_id}")
-async def clients_delete(client_id: int, user_id: int = Query(...)):
+async def clients_delete(client_id: int, user_id: int = Query(...), _: None = Depends(require_bearer)):
     async with POOL.acquire() as conn:
         r = await conn.execute("delete from app.clients where id=$1 and user_id=$2", client_id, user_id)
         if r.split()[-1] == "0":
@@ -121,7 +133,7 @@ async def clients_delete(client_id: int, user_id: int = Query(...)):
 
 # ---------- APPOINTMENTS ----------
 @app.get("/api/appointments")
-async def appts_list(user_id: int = Query(...), limit: int = Query(100, ge=1, le=500)):
+async def appts_list(user_id: int = Query(...), limit: int = Query(100, ge=1, le=500), _: None = Depends(require_bearer)):
     async with POOL.acquire() as conn:
         rows = await conn.fetch(
             "select a.id, a.user_id, a.client_id, a.start_at, a.end_at, a.status, "
@@ -134,9 +146,8 @@ async def appts_list(user_id: int = Query(...), limit: int = Query(100, ge=1, le
         )
         return {"items": [dict(r) for r in rows]}
 
-@app.post("/api/appointments")
-async def appts_create(payload: AppointmentIn, response: Response):
-    # если указан client_id — убедимся, что он принадлежит тому же user_id
+@app.post("/api/appointments", status_code=201)
+async def appts_create(payload: AppointmentIn, response: Response, _: None = Depends(require_bearer)):
     async with POOL.acquire() as conn:
         if payload.client_id is not None:
             owner = await conn.fetchval("select user_id from app.clients where id=$1", payload.client_id)
@@ -154,7 +165,7 @@ async def appts_create(payload: AppointmentIn, response: Response):
         return {"ok": True, "item": dict(row)}
 
 @app.put("/api/appointments/{appt_id}")
-async def appts_update(appt_id: int, payload: AppointmentIn, response: Response):
+async def appts_update(appt_id: int, payload: AppointmentIn, response: Response, _: None = Depends(require_bearer)):
     async with POOL.acquire() as conn:
         if payload.client_id is not None:
             owner = await conn.fetchval("select user_id from app.clients where id=$1", payload.client_id)
@@ -175,7 +186,7 @@ async def appts_update(appt_id: int, payload: AppointmentIn, response: Response)
         return {"ok": True, "item": dict(row)}
 
 @app.delete("/api/appointments/{appt_id}")
-async def appts_delete(appt_id: int, user_id: int = Query(...)):
+async def appts_delete(appt_id: int, user_id: int = Query(...), _: None = Depends(require_bearer)):
     async with POOL.acquire() as conn:
         r = await conn.execute("delete from app.appointments where id=$1 and user_id=$2", appt_id, user_id)
         if r.split()[-1] == "0":
