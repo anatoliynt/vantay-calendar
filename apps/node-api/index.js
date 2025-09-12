@@ -61,17 +61,16 @@ app.post("/api/users", async (req, res) => {
 
 // update
 app.put("/api/users/:id", async (req, res) => {
-  const id = parseInt(req.params.id, 10);
+  const id = Number(req.params.id);
   const { email, name } = req.body ?? {};
-  if (email === null) return res.status(400).json({ ok: false, error: "email cannot be null" });
   try {
     const r = await pool.query(
       `update app.users
          set email = coalesce($1, email),
-             name  = $2
+             name  = coalesce($2, name)
        where id = $3
        returning id, email, name, created_at, updated_at`,
-      [email, name ?? null, id]
+      [email ?? null, name ?? null, id]   // <-- ключевой момент: undefined -> null
     );
     if (r.rowCount === 0) return res.status(404).json({ ok: false, error: "not found" });
     res.json({ ok: true, item: r.rows[0] });
