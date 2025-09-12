@@ -34,3 +34,7 @@ apps/py-api/.venv/
 
 # npm local cache (legacy)
 apps/node-api/.npm/
+
+# local editor backups
+*.bak
+*.bak.*
