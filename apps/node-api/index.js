@@ -14,6 +14,19 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
 });
 
+// --- Bearer auth middleware ---
+const API_KEY = process.env.API_KEY;
+function auth(req, res, next) {
+  if (!API_KEY) return res.status(500).json({ ok: false, error: "API key not set" });
+  const h = req.get("authorization") || "";
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  if (!m || m[1] !== API_KEY) return res.status(401).json({ ok: false, error: "unauthorized" });
+  next();
+}
+
+app.use("/db-check", auth);
+app.use("/api", auth);
+
 // ---- health / db-check
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "node", ciTag: "ci-test-1", time: new Date().toISOString() });
